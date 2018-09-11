@@ -1,10 +1,10 @@
-9. Transport JWT in Session Cookie
-----------------------------------
+9. Transport JWT in HTTP Cookies
+--------------------------------
 
 Status
 ------
 
-Proposed
+Accepted
 
 Context
 -------
@@ -28,7 +28,10 @@ user interacts with the overall application, the user's experience may lead them
 each accessing APIs on various backends. Stateless authentication (via self-contained JWTs) would allow scalable
 interactions between microfrontends and microservices.
 
-Note: User authentication for open edX mobile apps is outside the scope of this decision record.
+Note: User authentication for open edX mobile apps is outside the scope of this decision record. As a brief note, we
+believe any decisions in this record will neither affect the current authentication mechanisms used for mobile
+apps nor impact forward compatibility when/if mobile apps are consolidated to use a similar (if not the same)
+authentication mechanism as outlined here for web apps.
 
 .. _Use JWT as OAuth2 Tokens: https://github.com/edx/edx-platform/blob/master/openedx/core/djangoapps/oauth_dispatch/docs/decisions/0003-use-jwt-as-oauth-tokens-remove-openid-connect.rst
 .. _Use Asymmetric JWTs: https://github.com/edx/edx-platform/blob/master/openedx/core/djangoapps/oauth_dispatch/docs/decisions/0008-use-asymmetric-jwts.rst
@@ -46,16 +49,27 @@ Login -> Cookie -> API
    login-related vulnerabilities (i.e., frontend applications that gain access to users' passwords) and
    login-related protections (i.e., password validation policies) to single points in the system.
 
-#. **"JWT Cookie".** Upon successful login, the backend login service will create and sign a JWT to identify the
-   newly logged in user. The JWT will be embedded in a session cookie ("JWT Cookie"), included in the login
-   response and stored in the user's browser cookie jar.
+#. **"Two JWT Cookies".** Upon successful login, the backend login service will create and sign a JWT to identify the
+   newly logged in user. The JWT will be divided into the following 2 HTTP cookies (inspired by `Lightrail's
+   design`_), included in the login response, and stored in the user's browser cookie jar:
 
-#. **Automatically extract JWT from Cookie on API calls.** The `Django Rest Framework JWT`_ library we use supports a
-   JWT_AUTH_COOKIE_ configuration setting to specify the JWT cookie name. When set, the JSONWebTokenAuthentication_
-   class `automatically extracts the JWT from the cookie`_. Since all open edX REST endpoints that support JWT-based
-   authentication derive from this base class, microfrontends can access them with JWT Cookies. We will enable this
-   setting.
+   * **"JWT Header/Payload Cookie"**
+     * Contains only the header and payload portions of the JWT.
+     * Disable HTTPOnly_ so the microfrontend can access user/role data in the JWT payload.
 
+   * **"JWT Signature Cookie"**
+     * Contains only the public key signature portion of the JWT.
+     * Enable HTTPOnly_ so the signature is unavailable to JS code. See `JWT Cookie Security`_ below.
+
+#. **Automatically recombine and extract the JWT from Cookies on API calls.** 
+     * We will create a new middleware that will reconstitute the divided JWT from its two cookies and store the
+       recombined JWT in a temporary cookie specified by JWT_AUTH_COOKIE_.
+     * The `Django Rest Framework JWT`_ library we use makes use of the JWT_AUTH_COOKIE_ configuration setting.
+       When set, the JSONWebTokenAuthentication_ class `automatically extracts the JWT from the cookie`_. Since all
+       open edX REST endpoints that support JWT-based authentication derive from this base class, their authentication
+       checks will make use of the JWTs provided in the JWT-related cookies.
+
+.. _`Lightrail's design`: https://medium.com/lightrail/getting-token-authentication-right-in-a-stateless-single-page-application-57d0c6474e3
 .. _Django Rest Framework JWT: https://getblimp.github.io/django-rest-framework-jwt/
 .. _JWT_AUTH_COOKIE: https://github.com/GetBlimp/django-rest-framework-jwt/blob/master/docs/index.md#jwt_auth_cookie
 .. _JSONWebTokenAuthentication: https://github.com/GetBlimp/django-rest-framework-jwt/blob/0a0bd402ec21fd6b9a5f715d114411836fbb2923/rest_framework_jwt/authentication.py#L71
@@ -65,9 +79,9 @@ Login -> Cookie -> API
 JWT Cookie Lifetime
 ^^^^^^^^^^^^^^^^^^^
 
-#. **Cookie and JWT expiration.** Both the session cookie and the JWT have expiration times.
+#. **Cookie and JWT expiration.** Both the HTTP cookies and the JWT have expiration times.
 
-   * For simplicity and consistency, the session cookie and its containing JWT will expire at the same time. There's
+   * For simplicity and consistency, the cookies and their containing JWT will expire at the same time. There's
      no need to have these be different values.
 
    * Given this, JWT cookies will always have expiration values, unlike `current open edX session cookies that may
@@ -77,23 +91,24 @@ JWT Cookie Lifetime
      containing cookie.
 
 #. **Revocation with short-lived JWTs** Given the tradeoff between long-lived JWTs versus immediacy of revocation, we
-   need to configure an appropriate expiration value for JWT cookies. In a future world with an API gateway, we can
-   have longer lived JWTs with a stateful check against a centralized `JWT blacklist`_ and each JWT uniquely
+   need to configure an appropriate expiration value for JWT cookies. In a future world with an API gateway, we *may*
+   have longer lived JWTs with a *stateful* check against a centralized `JWT blacklist`_ and each JWT uniquely
    identified by a `JWT ID (jti)`_. In the meantime, we will err on the side of security and have short-lived JWTs. 
 
 #. **Refresh JWT Cookies.** When a JWT expires, we do not want to ask the user to login again while their browser
    session remains alive. A microfrontend will detect JWT expiration upon receiving a 401 response from an API
-   endpoint. To automatically refresh the JWT cookie, the microfrontend will call a new endpoint ("refresh") that
-   returns a new JWT Cookie to keep the user's session alive.
+   endpoint, or preemptively recognize an imminent expiration. To automatically refresh the JWT cookie, the
+   microfrontend will call a new endpoint ("refresh") that returns a new JWT Cookie to keep the user's session alive.
 
-   * To support this, the login endpoint will include 2 related cookies in its response:
+   * To support this, the login endpoint will include 3 related cookies in its response:
 
-     * **JWT Cookie** (as described above), with a *domain* setting so that it is forwarded to any microservice in
-       the system.
+     * **Two JWT Cookies** (as described above), with a *domain* setting so that it is forwarded to any microservice
+       in the system.
      * **JWT Refresh Cookie**, with a *domain* setting so that it is sent to the login service only.
 
-#. **Remove JWT Cookie on Logout.** When the user logs out, remove the JWT cookie in the response, which will remove
-   it from the user's browser cookie jar. Thus, the user will be logged out of all the application's microfrontends.
+#. **Remove JWT Cookie on Logout.** When the user logs out, we will remove all JWT-related cookies in the response,
+   which will remove them from the user's browser cookie jar. Thus, the user will be logged out of all the
+   microfrontends.
 
 .. _`current open edX session cookies that may have no expiration`: https://github.com/edx/edx-platform/blob/92030ea15216a6641c83dd7bb38a9b65112bf31a/common/djangoapps/student/cookies.py#L25-L27
 .. _JWT blacklist: https://auth0.com/blog/blacklist-json-web-token-api-keys/
@@ -103,7 +118,7 @@ JWT Cookie Lifetime
 JWT Cookie Content
 ^^^^^^^^^^^^^^^^^^
 
-#. **Minimize JWT size.** According to `HTTP Cookie RFC standard`_, session cookies `up to 4096 bytes`_ should be
+#. **Minimize JWT size.** According to the `HTTP Cookie RFC standard`_, HTTP cookies `up to 4096 bytes`_ should be
    supported by a browser. `Modern browsers have treated this requirement as a maximum`_ - and hence do not support
    more than 4096 bytes. Our current JWT size is about 970 bytes (varying with size of user identifiers, like user's
    name, etc). (Side note: Signing a JWT with a 2048 byte asymmetric key increases the JWT's size by 325 bytes.)
@@ -125,20 +140,18 @@ JWT Cookie Content
 JWT Cookie Security
 ^^^^^^^^^^^^^^^^^^^
 
-#. **Enable CSRF Protection.** Storing JWTs in session cookies is potentially vulnerable to CSRF attacks.
+#. **Enable CSRF Protection.** Storing JWTs in HTTP cookies is potentially vulnerable to CSRF attacks.
    See `JWT Cookie Storage Security`_. To protect against this:
    
-   * Enable the HttpOnly_ flag on the cookie, so Javascript code cannot access the cookie directly.
+   * Enable the HttpOnly_ flag on the **"JWT Signature Cookie"**, so Javascript code cannot misuse the JWT.
    * Enable the Secure_ flag on the cookie, so it will not be sent (and thus leaked) through an unencrypted channel.
    * Enable `Django's CSRF middleware`_ for every response.
-   * Ensure all GET requests are side-effect free, via the `Safe Endpoints middleware`_.
+   * Ensure all GET requests are side-effect free.
    
      * Note: The `same-origin policy`_ protects against CSRF attacks on GET requests since the rogue website cannot
        access the response from the GET request.
-     * However, since the GET request is still processed on the server, we need to ensure there are no unwanted
-       side-effects.
-     * Question:  If we cannot ensure all GET requests will be side-effect free, can/should we include the CSRF
-       value as a GET parameter?
+     * However, even though the rogue website cannot access the response, the GET request is still processed on the
+       server before returning the response. So we need to ensure there are no unwanted side-effects on the server.
 
 #. **CORS and withCredentials.** `Cross-origin resource sharing (CORS)`_ will need to be configured so that all allowed
    microfrontends can access the necessary backend microservices. In addition, microfrontends will need to set the
@@ -153,7 +166,6 @@ JWT Cookie Security
 .. _HttpOnly: https://www.owasp.org/index.php/HttpOnly
 .. _Secure: https://www.owasp.org/index.php/SecureFlag
 .. _`Django's CSRF middleware`: https://docs.djangoproject.com/en/1.11/ref/csrf/
-.. _Safe Endpoints middleware: https://github.com/edx/edx-platform-private/pull/120
 .. _same-origin policy: https://en.wikipedia.org/wiki/Same-origin_policy
 .. _Cross-origin resource sharing (CORS): https://en.wikipedia.org/wiki/Cross-origin_resource_sharing
 .. _withCredentials: https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/withCredentials
@@ -169,17 +181,14 @@ Consequences
    over time and implement a warning before it exceeds the size. Having this hard limit requires us to be judicious
    of what data is included in the JWT. A bloated JWT is not necessarily a benefit to overall web performance.
 
-   If the size limitation becomes a concern in the future, we may need to break up the JWTs into multiple. For
-   example, separating authentication-related JWTs from authorization-related JWTs.
+   Separating the JWT into two, specifically its large signature, mitigates this issue significantly.
 
-#. Since the JWT Cookie, which contains user information, will not be accessible to the microfrontend JS code, we
-   will need another option to allow the microfrontend to get user information. Some options are:
+#. Since the **"JWT Header/Payload Cookie"** is accessible to the microfrontend JS code, it allows the microfrontend
+   to get user information directly and immediately from the cookie. Alternatively, we would have needed to:
 	
    #. Add an extra round trip to get the user-data from a backend API, and then cache it in HTML5 Storage.
-   #. Continue to use and expand the current `JS-accessible user-info cookie`_, which contain user-data.
+   #. Continue to use and expand the current `JS-accessible user-info cookie`_, which contains user-data.
    #. Have the server populate the initial DOM with this data, but this would only work for server-generated HTML.
-
-   Note: we will explore these options and tackle this issue separately.
 
 .. _JWT sessionStorage and localStorage Security: https://stormpath. com/blog/where-to-store-your-jwts-cookies-vs-html5-web-storage#so-whats-the-difference
 .. _JS-accessible user-info cookie: https://github.com/edx/edx-platform/blob/70d1ca474012b89e4c7184d25499eb87b3135409/common/djangoapps/student/cookies.py#L151
@@ -191,3 +200,4 @@ References
 * https://dzone.com/articles/cookies-vs-tokens-the-definitive-guide
 * http://www.redotheweb.com/2015/11/09/api-security.html
 * http://flask-jwt-extended.readthedocs.io/en/latest/tokens_in_cookies.html
+* https://medium.com/lightrail/getting-token-authentication-right-in-a-stateless-single-page-application-57d0c6474e3
