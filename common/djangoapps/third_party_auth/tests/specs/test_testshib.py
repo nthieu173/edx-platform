@@ -18,9 +18,9 @@ from social_django.models import UserSocialAuth
 from testfixtures import LogCapture
 
 from enterprise.models import EnterpriseCustomerIdentityProvider, EnterpriseCustomerUser
+from openedx.core.djangoapps.user_api.accounts.settings_views import account_settings_context
 from openedx.features.enterprise_support.tests.factories import EnterpriseCustomerFactory
 from student import views as student_views
-from student_account.views import account_settings_context
 from third_party_auth import pipeline
 from third_party_auth.saml import SapSuccessFactorsIdentityProvider, log as saml_log
 from third_party_auth.tasks import fetch_saml_metadata

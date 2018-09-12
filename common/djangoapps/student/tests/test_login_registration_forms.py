@@ -40,7 +40,7 @@ def _finish_auth_url(params):
 class LoginFormTest(ThirdPartyAuthTestMixin, UrlResetMixin, SharedModuleStoreTestCase):
     """Test rendering of the login form. """
 
-    URLCONF_MODULES = ['lms.urls']
+    URLCONF_MODULES = ['lms.urls', 'lms.djangoapps.user_authn.urls']
 
     @classmethod
     def setUpClass(cls):
@@ -157,7 +157,7 @@ class LoginFormTest(ThirdPartyAuthTestMixin, UrlResetMixin, SharedModuleStoreTes
 class RegisterFormTest(ThirdPartyAuthTestMixin, UrlResetMixin, SharedModuleStoreTestCase):
     """Test rendering of the registration form. """
 
-    URLCONF_MODULES = ['lms.urls']
+    URLCONF_MODULES = ['lms.urls', 'lms.djangoapps.user_authn.urls']
 
     @classmethod
     def setUpClass(cls):

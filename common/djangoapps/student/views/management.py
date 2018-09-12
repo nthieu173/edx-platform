@@ -205,7 +205,7 @@ def index(request, extra_context=None, user=AnonymousUser()):
 @ensure_csrf_cookie
 def register_user(request, extra_context=None):
     """
-    Deprecated. To be replaced by :class:`student_account.views.login_and_registration_form`.
+    Deprecated. To be replaced by :class:`user_authn.views.login.login_and_registration_form`.
     """
     # Determine the URL to redirect to following login:
     redirect_to = get_next_url_for_login_page(request)

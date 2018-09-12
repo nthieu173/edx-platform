@@ -524,7 +524,7 @@ def login_oauth_token(request, backend):
 
 @ensure_csrf_cookie
 def signin_user(request):
-    """Deprecated. To be replaced by :class:`student_account.views.login_and_registration_form`."""
+    """Deprecated. To be replaced by :class:`user_authn.views.login.login_and_registration_form`."""
     external_auth_response = external_auth_login(request)
     if external_auth_response is not None:
         return external_auth_response

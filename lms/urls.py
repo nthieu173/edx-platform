@@ -50,7 +50,6 @@ from ratelimitbackend import admin
 from static_template_view import views as static_template_view_views
 from staticbook import views as staticbook_views
 from student import views as student_views
-from student_account import views as student_account_views
 from track import views as track_views
 from util import views as util_views
 
@@ -141,23 +140,6 @@ urlpatterns = [
     url(r'^dashboard/', include('learner_dashboard.urls')),
     url(r'^api/experiments/', include('experiments.urls', namespace='api_experiments')),
 ]
-
-# TODO: This needs to move to a separate urls.py once the student_account and
-# student views below find a home together
-if settings.FEATURES.get('ENABLE_COMBINED_LOGIN_REGISTRATION'):
-    # Backwards compatibility with old URL structure, but serve the new views
-    urlpatterns += [
-        url(r'^login$', student_account_views.login_and_registration_form,
-            {'initial_mode': 'login'}, name='signin_user'),
-        url(r'^register$', student_account_views.login_and_registration_form,
-            {'initial_mode': 'register'}, name='register_user'),
-    ]
-else:
-    # Serve the old views
-    urlpatterns += [
-        url(r'^login$', student_views.signin_user, name='signin_user'),
-        url(r'^register$', student_views.register_user, name='register_user'),
-    ]
 
 if settings.FEATURES.get('ENABLE_MOBILE_REST_API'):
     urlpatterns += [
@@ -606,12 +588,6 @@ urlpatterns += [
         ),
         courseware_views.get_course_lti_endpoints,
         name='lti_rest_endpoints',
-    ),
-
-    # Student account
-    url(
-        r'^account/',
-        include('student_account.urls')
     ),
 
     # Student Notes

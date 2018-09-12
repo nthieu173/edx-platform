@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """ Tests for student account views. """
 
+from http.cookies import SimpleCookie
 import logging
 import re
 from unittest import skipUnless
@@ -24,7 +25,6 @@ from django.test.utils import override_settings
 from django.utils.translation import ugettext as _
 from edx_oauth2_provider.tests.factories import AccessTokenFactory, ClientFactory, RefreshTokenFactory
 from edx_rest_api_client import exceptions
-from http.cookies import SimpleCookie
 from oauth2_provider.models import AccessToken as dot_access_token
 from oauth2_provider.models import RefreshToken as dot_refresh_token
 from provider.oauth2.models import AccessToken as dop_access_token
@@ -35,22 +35,22 @@ from course_modes.models import CourseMode
 from lms.djangoapps.commerce.models import CommerceConfiguration
 from lms.djangoapps.commerce.tests import factories
 from lms.djangoapps.commerce.tests.mocks import mock_get_orders
-from lms.djangoapps.student_account.views import login_and_registration_form
+from lms.djangoapps.user_authn.views.login import login_and_registration_form
 from openedx.core.djangoapps.oauth_dispatch.tests import factories as dot_factories
 from openedx.core.djangoapps.programs.tests.mixins import ProgramsApiConfigMixin
 from openedx.core.djangoapps.site_configuration.tests.factories import SiteFactory
 from openedx.core.djangoapps.site_configuration.tests.mixins import SiteMixin
 from openedx.core.djangoapps.theming.tests.test_util import with_comprehensive_theme_context
 from openedx.core.djangoapps.user_api.accounts.api import activate_account, create_account
+from openedx.core.djangoapps.user_api.accounts.settings_views import account_settings_context, get_user_orders
+from openedx.core.djangoapps.user_api.errors import UserAPIInternalError
 from openedx.core.djangolib.js_utils import dump_js_escaped_json
 from openedx.core.djangolib.markup import HTML, Text
 from openedx.core.djangolib.testing.utils import CacheIsolationTestCase
 from student.tests.factories import UserFactory
-from student_account.views import account_settings_context, get_user_orders
 from third_party_auth.tests.testutil import ThirdPartyAuthTestMixin, simulate_running_pipeline
 from util.testing import UrlResetMixin
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
-from openedx.core.djangoapps.user_api.errors import UserAPIInternalError
 
 LOGGER_NAME = 'audit'
 User = get_user_model()  # pylint:disable=invalid-name
@@ -304,7 +304,7 @@ class StudentAccountLoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMi
     URLCONF_MODULES = ['openedx.core.djangoapps.embargo']
 
     @mock.patch.dict(settings.FEATURES, {'EMBARGO': True})
-    def setUp(self):
+    def setUp(self):  # pylint: disable=arguments-differ
         super(StudentAccountLoginAndRegistrationTest, self).setUp()
 
         # Several third party auth providers are created for these tests:
@@ -387,7 +387,7 @@ class StudentAccountLoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMi
         response = self.client.get(reverse(url_name))
         self._assert_third_party_auth_data(response, None, None, [], None)
 
-    @mock.patch('student_account.views.enterprise_customer_for_request')
+    @mock.patch('lms.djangoapps.user_authn.views.login.enterprise_customer_for_request')
     @mock.patch('openedx.core.djangoapps.user_api.api.enterprise_customer_for_request')
     @ddt.data(
         ("signin_user", None, None, None, False),
@@ -448,7 +448,7 @@ class StudentAccountLoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMi
 
         # Simulate a running pipeline
         if current_backend is not None:
-            pipeline_target = "student_account.views.third_party_auth.pipeline"
+            pipeline_target = "lms.djangoapps.user_authn.views.login.third_party_auth.pipeline"
             with simulate_running_pipeline(pipeline_target, current_backend, email=email):
                 response = self.client.get(reverse(url_name), params, HTTP_ACCEPT="text/html")
 
@@ -509,7 +509,7 @@ class StudentAccountLoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMi
         self.configure_saml_provider(**kwargs)
 
     @mock.patch('django.conf.settings.MESSAGE_STORAGE', 'django.contrib.messages.storage.cookie.CookieStorage')
-    @mock.patch('lms.djangoapps.student_account.views.enterprise_customer_for_request')
+    @mock.patch('lms.djangoapps.user_authn.views.login.enterprise_customer_for_request')
     @ddt.data(
         (
             'signin_user',
@@ -552,7 +552,7 @@ class StudentAccountLoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMi
                 'idp_name': dummy_idp
             }
         }
-        pipeline_target = 'student_account.views.third_party_auth.pipeline'
+        pipeline_target = 'lms.djangoapps.user_authn.views.login.third_party_auth.pipeline'
         with simulate_running_pipeline(pipeline_target, current_backend, **pipeline_response):
             with mock.patch('edxmako.request_context.get_current_request', return_value=request):
                 response = login_and_registration_form(request)
@@ -653,7 +653,7 @@ class StudentAccountLoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMi
             target_status_code=302
         )
 
-    @mock.patch('student_account.views.enterprise_customer_for_request')
+    @mock.patch('lms.djangoapps.user_authn.views.login.enterprise_customer_for_request')
     @ddt.data(
         ('signin_user', False, None, None),
         ('register_user', False, None, None),
@@ -867,7 +867,7 @@ class AccountSettingsViewTest(ThirdPartyAuthTestMixin, TestCase, ProgramsApiConf
     ]
 
     @mock.patch("django.conf.settings.MESSAGE_STORAGE", 'django.contrib.messages.storage.cookie.CookieStorage')
-    def setUp(self):
+    def setUp(self):  # pylint: disable=arguments-differ
         super(AccountSettingsViewTest, self).setUp()
         self.user = UserFactory.create(username=self.USERNAME, password=self.PASSWORD)
         CommerceConfiguration.objects.create(cache_ttl=10, enabled=True)
@@ -919,7 +919,7 @@ class AccountSettingsViewTest(ThirdPartyAuthTestMixin, TestCase, ProgramsApiConf
             context['enterprise_readonly_account_fields'], {'fields': settings.ENTERPRISE_READONLY_ACCOUNT_FIELDS}
         )
 
-    @mock.patch('student_account.views.get_enterprise_customer_for_learner')
+    @mock.patch('openedx.core.djangoapps.user_api.accounts.settings_views.get_enterprise_customer_for_learner')
     @mock.patch('openedx.features.enterprise_support.utils.third_party_auth.provider.Registry.get')
     def test_context_for_enterprise_learner(
             self, mock_get_auth_provider, mock_get_enterprise_customer_for_learner
