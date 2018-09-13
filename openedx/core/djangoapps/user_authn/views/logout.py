@@ -1,4 +1,4 @@
-import logging
+""" Views related to logout. """
 from urlparse import parse_qs, urlsplit, urlunsplit
 
 import edx_oauth2_provider
@@ -9,7 +9,7 @@ from django.shortcuts import redirect
 from django.utils.http import is_safe_url, urlencode
 from django.views.generic import TemplateView
 from provider.oauth2.models import Client
-from lms.djangoapps.user_authn.cookies import delete_logged_in_cookies
+from openedx.core.djangoapps.user_authn.cookies import delete_logged_in_cookies
 
 
 class LogoutView(TemplateView):
@@ -34,12 +34,16 @@ class LogoutView(TemplateView):
         """
         target_url = self.request.GET.get('redirect_url')
 
-        if target_url and is_safe_url(target_url, allowed_hosts={self.request.META.get('HTTP_HOST')}, require_https=True):
+        if target_url and is_safe_url(
+            target_url,
+            allowed_hosts={self.request.META.get('HTTP_HOST')},
+            require_https=True,
+        ):
             return target_url
         else:
             return self.default_target
 
-    def dispatch(self, request, *args, **kwargs):  # pylint: disable=missing-docstring
+    def dispatch(self, request, *args, **kwargs):
         # We do not log here, because we have a handler registered to perform logging on successful logouts.
         request.is_from_logout = True
 

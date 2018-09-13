@@ -18,8 +18,8 @@ from social_django.models import UserSocialAuth
 from testfixtures import LogCapture
 
 from enterprise.models import EnterpriseCustomerIdentityProvider, EnterpriseCustomerUser
-from lms.djangoapps.user_authn.views.deprecated import signin_user
-from lms.djangoapps.user_authn.views.login import login_user
+from openedx.core.djangoapps.user_authn.views.deprecated import signin_user
+from openedx.core.djangoapps.user_authn.views.login import login_user
 from openedx.core.djangoapps.user_api.accounts.settings_views import account_settings_context
 from openedx.features.enterprise_support.tests.factories import EnterpriseCustomerFactory
 from third_party_auth import pipeline

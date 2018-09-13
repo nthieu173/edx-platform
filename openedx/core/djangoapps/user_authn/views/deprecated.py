@@ -11,11 +11,10 @@ from django.utils.translation import ugettext as _
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from six import text_type, iteritems
 
-import third_party_auth
-from edxmako.shortcuts import render_to_response, render_to_string
+from edxmako.shortcuts import render_to_response
 
-from lms.djangoapps.user_authn.views.register import create_account_with_params
-from lms.djangoapps.user_authn.cookies import set_logged_in_cookies
+from openedx.core.djangoapps.user_authn.views.register import create_account_with_params
+from openedx.core.djangoapps.user_authn.cookies import set_logged_in_cookies
 from openedx.core.djangoapps.external_auth.login_and_register import login as external_auth_login
 from openedx.core.djangoapps.external_auth.login_and_register import register as external_auth_register
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
@@ -25,6 +24,7 @@ from student.helpers import (
     get_next_url_for_login_page
 )
 from student.helpers import AccountValidationError
+import third_party_auth
 from third_party_auth import pipeline, provider
 from util.json_request import JsonResponse
 
@@ -44,7 +44,7 @@ def signin_user(request):
     for msg in messages.get_messages(request):
         if msg.extra_tags.split()[0] == "social-auth":
             # msg may or may not be translated. Try translating [again] in case we are able to:
-            third_party_auth_error = _(text_type(msg))  # pylint: disable=translation-of-non-string
+            third_party_auth_error = _(text_type(msg))
             break
 
     context = {
@@ -116,6 +116,7 @@ def register_user(request, extra_context=None):
 @transaction.non_atomic_requests
 def create_account(request, post_override=None):
     """
+    Deprecated. Use RegistrationView instead.
     JSON call to create new edX account.
     Used by form in signup_modal.html, which is included into header.html
     """

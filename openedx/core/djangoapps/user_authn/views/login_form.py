@@ -6,14 +6,15 @@ import logging
 import urlparse
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect
 from django.utils.translation import ugettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 
 from edxmako.shortcuts import render_to_response
-from lms.djangoapps.user_authn.views.deprecated import register_user as old_register_view, signin_user as old_login_view
+from openedx.core.djangoapps.user_authn.views.deprecated import (
+    register_user as old_register_view, signin_user as old_login_view
+)
 from openedx.core.djangoapps.external_auth.login_and_register import login as external_auth_login
 from openedx.core.djangoapps.external_auth.login_and_register import register as external_auth_register
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers

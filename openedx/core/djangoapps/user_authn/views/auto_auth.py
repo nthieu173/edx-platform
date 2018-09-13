@@ -1,3 +1,4 @@
+""" Views related to auto auth. """
 import datetime
 import uuid
 
@@ -24,8 +25,6 @@ from student.helpers import (
 from student.models import (
     CourseAccessRole,
     CourseEnrollment,
-    LoginFailures,
-    PasswordHistory,
     Registration,
     UserProfile,
     anonymous_id_for_user,
@@ -35,7 +34,7 @@ from student.helpers import authenticate_new_user, do_create_account
 from util.json_request import JsonResponse
 
 
-def auto_auth(request):
+def auto_auth(request):  # pylint: disable=too-many-statements
     """
     Create or configure a user account, then log in as that user.
 
@@ -175,7 +174,7 @@ def auto_auth(request):
             'username': username,
             'email': email,
             'password': password,
-            'user_id': user.id,  # pylint: disable=no-member
+            'user_id': user.id,
             'anonymous_id': anonymous_id_for_user(user, None),
         })
     response.set_cookie('csrftoken', csrf(request)['csrf_token'])

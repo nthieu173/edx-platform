@@ -5,7 +5,6 @@ Registration related views.
 import datetime
 import json
 import logging
-from collections import namedtuple
 
 import analytics
 import dogstats_wrapper as dog_stats_api
@@ -27,37 +26,22 @@ from six import text_type
 from social_core.exceptions import AuthAlreadyAssociated, AuthException
 from social_django import utils as social_utils
 
-from openedx.core.djangoapps.ace_common.template_context import get_base_template_context
 from openedx.core.djangoapps.lang_pref import LANGUAGE_KEY
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.user_api import accounts as accounts_settings
 from openedx.core.djangoapps.user_api.accounts.utils import generate_password
 from openedx.core.djangoapps.user_api.preferences import api as preferences_api
 
-from student.forms import AccountCreationForm, PasswordResetFormNoActive, get_registration_extension_form
+from student.forms import AccountCreationForm, get_registration_extension_form
 from student.helpers import (
-    DISABLE_UNENROLL_CERT_STATES,
-    AccountValidationError,
-    auth_pipeline_urls,
     authenticate_new_user,
-    cert_info,
     create_or_set_user_attribute_created_on_site,
     do_create_account,
-    generate_activation_email_context,
-    get_next_url_for_login_page
 )
 from student.models import (
-    CourseEnrollment,
-    PasswordHistory,
-    PendingEmailChange,
-    Registration,
     RegistrationCookieConfiguration,
     UserAttribute,
-    UserProfile,
-    UserSignupSource,
-    UserStanding,
     create_comments_service_user,
-    email_exists_or_retired,
 )
 from student.views import compose_and_send_activation_email
 import third_party_auth
@@ -135,7 +119,6 @@ def create_account_with_params(request, params):
     # `third_party_auth_credentials_in_api` essentially means 'request
     # is made from mobile application'
     third_party_auth_credentials_in_api = 'provider' in params
-
     is_third_party_auth_enabled = third_party_auth.is_enabled()
 
     if is_third_party_auth_enabled and (pipeline.running(request) or third_party_auth_credentials_in_api):
@@ -151,22 +134,7 @@ def create_account_with_params(request, params):
             ]}
         )
 
-    # if doing signup for an external authorization, then get email, password, name from the eamap
-    # don't use the ones from the form, since the user could have hacked those
-    # unless originally we didn't get a valid email or name from the external auth
-    # TODO: We do not check whether these values meet all necessary criteria, such as email length
-    do_external_auth = 'ExternalAuthMap' in request.session
-    if do_external_auth:
-        eamap = request.session['ExternalAuthMap']
-        try:
-            validate_email(eamap.external_email)
-            params["email"] = eamap.external_email
-        except ValidationError:
-            pass
-        if len(eamap.external_name.strip()) >= accounts_settings.NAME_MIN_LENGTH:
-            params["name"] = eamap.external_name
-        params["password"] = eamap.internal_password
-        log.debug(u'In create_account with external_auth: user = %s, email=%s', params["name"], params["email"])
+    do_external_auth, eamap = pre_account_creation_external_auth(request, params)
 
     extended_profile_fields = configuration_helpers.get_value('extended_profile_fields', [])
     enforce_password_policy = not do_external_auth
@@ -191,71 +159,20 @@ def create_account_with_params(request, params):
     )
     custom_form = get_registration_extension_form(data=params)
 
-    third_party_provider = None
-    running_pipeline = None
-    new_user = None
-
     # Perform operations within a transaction that are critical to account creation
     with outer_atomic(read_committed=True):
         # first, create the account
         (user, profile, registration) = do_create_account(form, custom_form)
 
-        # If a 3rd party auth provider and credentials were provided in the API, link the account with social auth
-        # (If the user is using the normal register page, the social auth pipeline does the linking, not this code)
-
-        # Note: this is orthogonal to the 3rd party authentication pipeline that occurs
-        # when the account is created via the browser and redirect URLs.
-
-        if is_third_party_auth_enabled and third_party_auth_credentials_in_api:
-            backend_name = params['provider']
-            request.social_strategy = social_utils.load_strategy(request)
-            redirect_uri = reverse('social:complete', args=(backend_name, ))
-            request.backend = social_utils.load_backend(request.social_strategy, backend_name, redirect_uri)
-            social_access_token = params.get('access_token')
-            if not social_access_token:
-                raise ValidationError({
-                    'access_token': [
-                        _("An access_token is required when passing value ({}) for provider.").format(
-                            params['provider']
-                        )
-                    ]
-                })
-            request.session[pipeline.AUTH_ENTRY_KEY] = pipeline.AUTH_ENTRY_REGISTER_API
-            pipeline_user = None
-            error_message = ""
-            try:
-                pipeline_user = request.backend.do_auth(social_access_token, user=user)
-            except AuthAlreadyAssociated:
-                error_message = _("The provided access_token is already associated with another user.")
-            except (HTTPError, AuthException):
-                error_message = _("The provided access_token is not valid.")
-            if not pipeline_user or not isinstance(pipeline_user, User):
-                # Ensure user does not re-enter the pipeline
-                request.social_strategy.clean_partial_pipeline(social_access_token)
-                raise ValidationError({'access_token': [error_message]})
-
-        # If the user is registering via 3rd party auth, track which provider they use
-        if is_third_party_auth_enabled and pipeline.running(request):
-            running_pipeline = pipeline.get(request)
-            third_party_provider = provider.Registry.get_from_pipeline(running_pipeline)
+        third_party_provider, running_pipeline = _link_user_to_third_party_provider(
+            is_third_party_auth_enabled, third_party_auth_credentials_in_api, user, request, params,
+        )
 
         new_user = authenticate_new_user(request, user.username, params['password'])
         django_login(request, new_user)
         request.session.set_expiry(0)
 
-        if do_external_auth:
-            eamap.user = new_user
-            eamap.dtsignup = datetime.datetime.now(UTC)
-            eamap.save()
-            AUDIT_LOG.info(u"User registered with external_auth %s", new_user.username)
-            AUDIT_LOG.info(u'Updated ExternalAuthMap for %s to be %s', new_user.username, eamap)
-
-            if settings.FEATURES.get('BYPASS_ACTIVATION_EMAIL_FOR_EXTAUTH'):
-                log.info('bypassing activation email')
-                new_user.is_active = True
-                new_user.save()
-                AUDIT_LOG.info(
-                    u"Login activated on extauth account - {0} ({1})".format(new_user.username, new_user.email))
+        post_account_creation_external_auth(do_external_auth, eamap, new_user)
 
     # Check if system is configured to skip activation email for the current user.
     skip_email = _skip_activation_email(
@@ -280,7 +197,125 @@ def create_account_with_params(request, params):
 
     dog_stats_api.increment("common.student.account_created")
 
-    # Track the user's registration
+    _track_user_registration(user, profile, params, third_party_provider)
+
+    # Announce registration
+    REGISTER_USER.send(sender=None, user=user, registration=registration)
+
+    create_comments_service_user(user)
+
+    try:
+        _record_registration_attributions(request, new_user)
+    # Don't prevent a user from registering due to attribution errors.
+    except Exception:   # pylint: disable=broad-except
+        log.exception('Error while attributing cookies to user registration.')
+
+    # TODO: there is no error checking here to see that the user actually logged in successfully,
+    # and is not yet an active user.
+    if new_user is not None:
+        AUDIT_LOG.info(u"Login success on new account creation - {0}".format(new_user.username))
+
+    return new_user
+
+
+def pre_account_creation_external_auth(request, params):
+    """
+    External auth related setup before account is created.
+    """
+    # If doing signup for an external authorization, then get email, password, name from the eamap
+    # don't use the ones from the form, since the user could have hacked those
+    # unless originally we didn't get a valid email or name from the external auth
+    # TODO: We do not check whether these values meet all necessary criteria, such as email length
+    do_external_auth = 'ExternalAuthMap' in request.session
+    eamap = None
+    if do_external_auth:
+        eamap = request.session['ExternalAuthMap']
+        try:
+            validate_email(eamap.external_email)
+            params["email"] = eamap.external_email
+        except ValidationError:
+            pass
+        if len(eamap.external_name.strip()) >= accounts_settings.NAME_MIN_LENGTH:
+            params["name"] = eamap.external_name
+        params["password"] = eamap.internal_password
+        log.debug(u'In create_account with external_auth: user = %s, email=%s', params["name"], params["email"])
+
+    return do_external_auth, eamap
+
+
+def post_account_creation_external_auth(do_external_auth, eamap, new_user):
+    """
+    External auth related updates after account is created.
+    """
+    if do_external_auth:
+        eamap.user = new_user
+        eamap.dtsignup = datetime.datetime.now(UTC)
+        eamap.save()
+        AUDIT_LOG.info(u"User registered with external_auth %s", new_user.username)
+        AUDIT_LOG.info(u'Updated ExternalAuthMap for %s to be %s', new_user.username, eamap)
+
+        if settings.FEATURES.get('BYPASS_ACTIVATION_EMAIL_FOR_EXTAUTH'):
+            log.info('bypassing activation email')
+            new_user.is_active = True
+            new_user.save()
+            AUDIT_LOG.info(
+                u"Login activated on extauth account - {0} ({1})".format(new_user.username, new_user.email)
+            )
+
+
+def _link_user_to_third_party_provider(
+    is_third_party_auth_enabled,
+    third_party_auth_credentials_in_api,
+    user,
+    request,
+    params,
+):
+    """
+    If a 3rd party auth provider and credentials were provided in the API, link the account with social auth
+    (If the user is using the normal register page, the social auth pipeline does the linking, not this code)
+
+    Note: this is orthogonal to the 3rd party authentication pipeline that occurs
+    when the account is created via the browser and redirect URLs.
+    """
+    third_party_provider, running_pipeline = None, None
+    if is_third_party_auth_enabled and third_party_auth_credentials_in_api:
+        backend_name = params['provider']
+        request.social_strategy = social_utils.load_strategy(request)
+        redirect_uri = reverse('social:complete', args=(backend_name, ))
+        request.backend = social_utils.load_backend(request.social_strategy, backend_name, redirect_uri)
+        social_access_token = params.get('access_token')
+        if not social_access_token:
+            raise ValidationError({
+                'access_token': [
+                    _("An access_token is required when passing value ({}) for provider.").format(
+                        params['provider']
+                    )
+                ]
+            })
+        request.session[pipeline.AUTH_ENTRY_KEY] = pipeline.AUTH_ENTRY_REGISTER_API
+        pipeline_user = None
+        error_message = ""
+        try:
+            pipeline_user = request.backend.do_auth(social_access_token, user=user)
+        except AuthAlreadyAssociated:
+            error_message = _("The provided access_token is already associated with another user.")
+        except (HTTPError, AuthException):
+            error_message = _("The provided access_token is not valid.")
+        if not pipeline_user or not isinstance(pipeline_user, User):
+            # Ensure user does not re-enter the pipeline
+            request.social_strategy.clean_partial_pipeline(social_access_token)
+            raise ValidationError({'access_token': [error_message]})
+
+    # If the user is registering via 3rd party auth, track which provider they use
+    if is_third_party_auth_enabled and pipeline.running(request):
+        running_pipeline = pipeline.get(request)
+        third_party_provider = provider.Registry.get_from_pipeline(running_pipeline)
+
+    return third_party_provider, running_pipeline
+
+
+def _track_user_registration(user, profile, params, third_party_provider):
+    """ Track the user's registration. """
     if hasattr(settings, 'LMS_SEGMENT_KEY') and settings.LMS_SEGMENT_KEY:
         tracking_context = tracker.get_tracker().resolve_context()
         identity_args = [
@@ -323,24 +358,6 @@ def create_account_with_params(request, params):
                 }
             }
         )
-
-    # Announce registration
-    REGISTER_USER.send(sender=None, user=user, registration=registration)
-
-    create_comments_service_user(user)
-
-    try:
-        _record_registration_attributions(request, new_user)
-    # Don't prevent a user from registering due to attribution errors.
-    except Exception:   # pylint: disable=broad-except
-        log.exception('Error while attributing cookies to user registration.')
-
-    # TODO: there is no error checking here to see that the user actually logged in successfully,
-    # and is not yet an active user.
-    if new_user is not None:
-        AUDIT_LOG.info(u"Login success on new account creation - {0}".format(new_user.username))
-
-    return new_user
 
 
 def _skip_activation_email(user, do_external_auth, running_pipeline, third_party_provider):

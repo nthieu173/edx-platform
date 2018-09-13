@@ -30,7 +30,7 @@ from provider.oauth2.models import RefreshToken as dop_refresh_token
 from testfixtures import LogCapture
 
 from course_modes.models import CourseMode
-from lms.djangoapps.user_authn.views.login_form import login_and_registration_form
+from openedx.core.djangoapps.user_authn.views.login_form import login_and_registration_form
 from openedx.core.djangoapps.oauth_dispatch.tests import factories as dot_factories
 from openedx.core.djangoapps.site_configuration.tests.mixins import SiteMixin
 from openedx.core.djangoapps.theming.tests.test_util import with_comprehensive_theme_context
@@ -378,7 +378,7 @@ class LoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMixin, ModuleSto
         response = self.client.get(reverse(url_name))
         self._assert_third_party_auth_data(response, None, None, [], None)
 
-    @mock.patch('lms.djangoapps.user_authn.views.login_form.enterprise_customer_for_request')
+    @mock.patch('openedx.core.djangoapps.user_authn.views.login_form.enterprise_customer_for_request')
     @mock.patch('openedx.core.djangoapps.user_api.api.enterprise_customer_for_request')
     @ddt.data(
         ("signin_user", None, None, None, False),
@@ -439,7 +439,7 @@ class LoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMixin, ModuleSto
 
         # Simulate a running pipeline
         if current_backend is not None:
-            pipeline_target = "lms.djangoapps.user_authn.views.login_form.third_party_auth.pipeline"
+            pipeline_target = "openedx.core.djangoapps.user_authn.views.login_form.third_party_auth.pipeline"
             with simulate_running_pipeline(pipeline_target, current_backend, email=email):
                 response = self.client.get(reverse(url_name), params, HTTP_ACCEPT="text/html")
 
@@ -500,7 +500,7 @@ class LoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMixin, ModuleSto
         self.configure_saml_provider(**kwargs)
 
     @mock.patch('django.conf.settings.MESSAGE_STORAGE', 'django.contrib.messages.storage.cookie.CookieStorage')
-    @mock.patch('lms.djangoapps.user_authn.views.login_form.enterprise_customer_for_request')
+    @mock.patch('openedx.core.djangoapps.user_authn.views.login_form.enterprise_customer_for_request')
     @ddt.data(
         (
             'signin_user',
@@ -543,7 +543,7 @@ class LoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMixin, ModuleSto
                 'idp_name': dummy_idp
             }
         }
-        pipeline_target = 'lms.djangoapps.user_authn.views.login_form.third_party_auth.pipeline'
+        pipeline_target = 'openedx.core.djangoapps.user_authn.views.login_form.third_party_auth.pipeline'
         with simulate_running_pipeline(pipeline_target, current_backend, **pipeline_response):
             with mock.patch('edxmako.request_context.get_current_request', return_value=request):
                 response = login_and_registration_form(request)
@@ -644,7 +644,7 @@ class LoginAndRegistrationTest(ThirdPartyAuthTestMixin, UrlResetMixin, ModuleSto
             target_status_code=302
         )
 
-    @mock.patch('lms.djangoapps.user_authn.views.login_form.enterprise_customer_for_request')
+    @mock.patch('openedx.core.djangoapps.user_authn.views.login_form.enterprise_customer_for_request')
     @ddt.data(
         ('signin_user', False, None, None),
         ('register_user', False, None, None),

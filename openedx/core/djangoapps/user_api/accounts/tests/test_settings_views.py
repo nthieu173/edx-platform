@@ -1,3 +1,4 @@
+""" Tests for views related to account settings. """
 # -*- coding: utf-8 -*-
 import mock
 from django.conf import settings
@@ -13,11 +14,13 @@ from lms.djangoapps.commerce.tests import factories
 from lms.djangoapps.commerce.tests.mocks import mock_get_orders
 from openedx.core.djangoapps.programs.tests.mixins import ProgramsApiConfigMixin
 from openedx.core.djangoapps.site_configuration.tests.factories import SiteFactory
+from openedx.core.djangolib.testing.utils import skip_unless_lms
 from openedx.core.djangoapps.user_api.accounts.settings_views import account_settings_context, get_user_orders
 from student.tests.factories import UserFactory
-from third_party_auth.tests.testutil import ThirdPartyAuthTestMixin, simulate_running_pipeline
+from third_party_auth.tests.testutil import ThirdPartyAuthTestMixin
 
 
+@skip_unless_lms
 class AccountSettingsViewTest(ThirdPartyAuthTestMixin, TestCase, ProgramsApiConfigMixin):
     """ Tests for the account settings view. """
 

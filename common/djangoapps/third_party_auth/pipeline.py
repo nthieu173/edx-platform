@@ -78,14 +78,13 @@ from social_core.exceptions import AuthException
 from social_core.pipeline import partial
 from social_core.pipeline.social_auth import associate_by_email
 
-import student
 from edxmako.shortcuts import render_to_string
 from eventtracking import tracker
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
-from third_party_auth.utils import user_exists
-from lms.djangoapps.user_authn import cookies as user_authn_cookies
+from openedx.core.djangoapps.user_authn import cookies as user_authn_cookies
 from lms.djangoapps.verify_student.models import SSOVerification
 from lms.djangoapps.verify_student.utils import earliest_allowed_verification_date
+from third_party_auth.utils import user_exists
 
 from . import provider
 

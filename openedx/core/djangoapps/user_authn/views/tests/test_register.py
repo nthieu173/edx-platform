@@ -17,8 +17,8 @@ from django.test.utils import override_settings
 
 from django_comment_common.models import ForumsConfig
 from notification_prefs import NOTIFICATION_PREF_KEY
-from lms.djangoapps.user_authn.views.deprecated import create_account
-from lms.djangoapps.user_authn.views.register import (
+from openedx.core.djangoapps.user_authn.views.deprecated import create_account
+from openedx.core.djangoapps.user_authn.views.register import (
     REGISTRATION_AFFILIATE_ID, REGISTRATION_UTM_CREATED_AT, REGISTRATION_UTM_PARAMETERS,
     _skip_activation_email,
 )
@@ -163,8 +163,8 @@ class TestCreateAccount(SiteMixin, TestCase):
         "Microsites not implemented in this environment"
     )
     @override_settings(LMS_SEGMENT_KEY="testkey")
-    @mock.patch('lms.djangoapps.user_authn.views.register.analytics.track')
-    @mock.patch('lms.djangoapps.user_authn.views.register.analytics.identify')
+    @mock.patch('openedx.core.djangoapps.user_authn.views.register.analytics.track')
+    @mock.patch('openedx.core.djangoapps.user_authn.views.register.analytics.identify')
     def test_segment_tracking(self, mock_segment_identify, _):
         year = datetime.now().year
         year_of_birth = year - 14
@@ -829,6 +829,7 @@ class TestCreateAccountValidation(TestCase):
 @mock.patch("lms.lib.comment_client.User.base_url", TEST_CS_URL)
 @mock.patch("lms.lib.comment_client.utils.requests.request", return_value=mock.Mock(status_code=200, text='{}'))
 class TestCreateCommentsServiceUser(TransactionTestCase):
+    """ Tests for creating comments service user. """
 
     def setUp(self):
         super(TestCreateCommentsServiceUser, self).setUp()
@@ -862,7 +863,7 @@ class TestCreateCommentsServiceUser(TransactionTestCase):
         "If user account creation fails, we should not create a comments service user"
         try:
             self.client.post(self.url, self.params)
-        except:
+        except:  # pylint: disable=bare-except
             pass
         with self.assertRaises(User.DoesNotExist):
             User.objects.get(username=self.username)

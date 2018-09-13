@@ -11,7 +11,7 @@ class UserAuthnConfig(AppConfig):
     """
     Application Configuration for User Authentication.
     """
-    name = u'lms.djangoapps.user_authn'
+    name = u'openedx.core.djangoapps.user_authn'
 
     plugin_app = {
         PluginURLs.CONFIG: {
@@ -19,6 +19,11 @@ class UserAuthnConfig(AppConfig):
                 PluginURLs.NAMESPACE: u'',
                 PluginURLs.REGEX: u'',
                 PluginURLs.RELATIVE_PATH: u'urls',
-            }
+            },
+            ProjectType.CMS: {
+                PluginURLs.NAMESPACE: u'',
+                PluginURLs.REGEX: u'',
+                PluginURLs.RELATIVE_PATH: u'urls',
+            },
         },
     }

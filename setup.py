@@ -77,7 +77,7 @@ setup(
             "zendesk_proxy = openedx.core.djangoapps.zendesk_proxy.apps:ZendeskProxyConfig",
             "instructor = lms.djangoapps.instructor.apps:InstructorConfig",
             "password_policy = openedx.core.djangoapps.password_policy.apps:PasswordPolicyConfig",
-            "user_authn = lms.djangoapps.user_authn.apps:UserAuthnConfig"
+            "user_authn = openedx.core.djangoapps.user_authn.apps:UserAuthnConfig"
         ],
         "cms.djangoapp": [
             "ace_common = openedx.core.djangoapps.ace_common.apps:AceCommonConfig",
@@ -93,6 +93,7 @@ setup(
             "bookmarks = openedx.core.djangoapps.bookmarks.apps:BookmarksConfig",
             "zendesk_proxy = openedx.core.djangoapps.zendesk_proxy.apps:ZendeskProxyConfig",
             "password_policy = openedx.core.djangoapps.password_policy.apps:PasswordPolicyConfig",
+            "user_authn = openedx.core.djangoapps.user_authn.apps:UserAuthnConfig"
         ],
     }
 )

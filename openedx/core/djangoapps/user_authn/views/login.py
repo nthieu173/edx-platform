@@ -18,27 +18,21 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 from ratelimitbackend.exceptions import RateLimitException
 
-import third_party_auth
-from edxmako.shortcuts import render_to_response, render_to_string
+from edxmako.shortcuts import render_to_response
 from eventtracking import tracker
-from lms.djangoapps.user_authn.cookies import set_logged_in_cookies
-from lms.djangoapps.user_authn.exceptions import AuthFailedError
+from openedx.core.djangoapps.user_authn.cookies import set_logged_in_cookies
+from openedx.core.djangoapps.user_authn.exceptions import AuthFailedError
 import openedx.core.djangoapps.external_auth.views
 from openedx.core.djangoapps.external_auth.models import ExternalAuthMap
 from openedx.core.djangoapps.password_policy import compliance as password_policy_compliance
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.util.user_messages import PageLevelMessages
 from student.models import (
-    CourseAccessRole,
-    CourseEnrollment,
     LoginFailures,
     PasswordHistory,
-    Registration,
-    UserProfile,
-    anonymous_id_for_user,
-    create_comments_service_user
 )
-from student.views import generate_activation_email_context, send_reactivation_email_for_user
+from student.views import send_reactivation_email_for_user
+import third_party_auth
 from third_party_auth import pipeline, provider
 from util.json_request import JsonResponse
 
@@ -263,7 +257,7 @@ def _handle_successful_authentication_and_login(user, request):
             log.debug("Setting user session to never expire")
         else:
             request.session.set_expiry(0)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         AUDIT_LOG.critical("Login failed - Could not create session. Is memcached running?")
         log.critical("Login failed - Could not create session. Is memcached running?")
         log.exception(exc)

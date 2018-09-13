@@ -4,18 +4,15 @@ Tests for student activation and login
 import json
 import unittest
 
-import httpretty
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.urls import NoReverseMatch, reverse
 from django.http import HttpResponse, HttpResponseBadRequest
-from django.test import TestCase
 from django.test.client import Client
 from django.test.utils import override_settings
 from mock import patch
 from six import text_type
-from social_django.models import UserSocialAuth
 
 from openedx.core.djangoapps.external_auth.models import ExternalAuthMap
 from openedx.core.djangoapps.user_api.config.waffle import PREVENT_AUTH_USER_WRITES, waffle
@@ -425,7 +422,8 @@ class LoginTest(CacheIsolationTestCase):
         """
         Tests _enforce_password_policy_compliance succeeds when no exception is thrown
         """
-        with patch('user_authn.views.login.password_policy_compliance.enforce_compliance_on_login') as mock_check_password_policy_compliance:
+        enforce_compliance_path = 'openedx.core.djangoapps.password_policy.compliance.enforce_compliance_on_login'
+        with patch(enforce_compliance_path) as mock_check_password_policy_compliance:
             mock_check_password_policy_compliance.return_value = HttpResponse()
             response, _ = self._login_response(
                 'test@edx.org',
@@ -439,7 +437,7 @@ class LoginTest(CacheIsolationTestCase):
         """
         Tests _enforce_password_policy_compliance fails with an exception thrown
         """
-        with patch('user_authn.views.login.password_policy_compliance.enforce_compliance_on_login') as \
+        with patch('openedx.core.djangoapps.password_policy.compliance.enforce_compliance_on_login') as \
                 mock_enforce_compliance_on_login:
             mock_enforce_compliance_on_login.side_effect = NonCompliantPasswordException()
             response, _ = self._login_response(
@@ -454,7 +452,7 @@ class LoginTest(CacheIsolationTestCase):
         """
         Tests _enforce_password_policy_compliance succeeds with a warning thrown
         """
-        with patch('user_authn.views.login.password_policy_compliance.enforce_compliance_on_login') as \
+        with patch('openedx.core.djangoapps.password_policy.compliance.enforce_compliance_on_login') as \
                 mock_enforce_compliance_on_login:
             mock_enforce_compliance_on_login.side_effect = NonCompliantPasswordWarning('Test warning')
             response, _ = self._login_response(
@@ -470,7 +468,7 @@ class LoginTest(CacheIsolationTestCase):
         Post the login info
         """
         if patched_audit_log is None:
-            patched_audit_log = 'lms.djangoapps.user_authn.views.login.AUDIT_LOG'
+            patched_audit_log = 'openedx.core.djangoapps.user_authn.views.login.AUDIT_LOG'
         post_params = {'email': email, 'password': password}
         if extra_post_params is not None:
             post_params.update(extra_post_params)

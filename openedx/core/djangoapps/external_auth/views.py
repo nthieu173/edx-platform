@@ -282,7 +282,7 @@ def _signup(request, eamap, retfun=None):
     retfun is a function to execute for the return value, if immediate
     signup is used.  That allows @ssl_login_shortcut() to work.
     """
-    from lms.djangoapps.user_authn.views.deprecated import create_account, register_user
+    from openedx.core.djangoapps.user_authn.views.deprecated import create_account, register_user
 
     # save this for use by create_account
     request.session['ExternalAuthMap'] = eamap
