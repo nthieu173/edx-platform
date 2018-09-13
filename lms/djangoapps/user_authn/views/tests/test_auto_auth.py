@@ -20,7 +20,7 @@ class AutoAuthTestCase(UrlResetMixin, TestCase):
     """
     Base class for AutoAuth Tests that properly resets the urls.py
     """
-    URLCONF_MODULES = ['student.urls']
+    URLCONF_MODULES = ['lms.djangoapps.user_authn.urls']
 
 
 @ddt.ddt

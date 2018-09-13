@@ -25,19 +25,13 @@ from openedx.core.djangoapps.password_policy.compliance import (
 )
 from openedx.core.djangolib.testing.utils import CacheIsolationTestCase
 from student.tests.factories import RegistrationFactory, UserFactory, UserProfileFactory
-from student.views import login_oauth_token
-from third_party_auth.tests.utils import (
-    ThirdPartyOAuthTestMixin,
-    ThirdPartyOAuthTestMixinFacebook,
-    ThirdPartyOAuthTestMixinGoogle
-)
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
 
 
 class LoginTest(CacheIsolationTestCase):
     """
-    Test student.views.login_user() view
+    Test login_user() view
     """
 
     ENABLED_CACHES = ['default']
@@ -107,7 +101,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             nonexistent_email,
             'test_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False,
                               value='Email or password is incorrect')
@@ -119,7 +112,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             nonexistent_email,
             'test_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False,
                               value='Email or password is incorrect')
@@ -131,7 +123,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             nonexistent_email,
             'test_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False,
                               value='Email or password is incorrect')
@@ -142,7 +133,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             'test@edx.org',
             'wrong_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False,
                               value='Email or password is incorrect')
@@ -154,7 +144,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             'test@edx.org',
             'wrong_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False,
                               value='Email or password is incorrect')
@@ -170,7 +159,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             'test@edx.org',
             'test_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False,
                               value="In order to sign in, you need to activate your account.")
@@ -186,7 +174,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             'test@edx.org',
             'test_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False,
                               value="In order to sign in, you need to activate your account.")
@@ -198,7 +185,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             unicode_email,
             'test_password',
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False)
         self._assert_audit_log(mock_audit_log, 'warning', [u'Login failed', unicode_email])
@@ -208,7 +194,6 @@ class LoginTest(CacheIsolationTestCase):
         response, mock_audit_log = self._login_response(
             'test@edx.org',
             unicode_password,
-            'student.views.login.AUDIT_LOG'
         )
         self._assert_response(response, success=False)
         self._assert_audit_log(mock_audit_log, 'warning',
@@ -440,7 +425,7 @@ class LoginTest(CacheIsolationTestCase):
         """
         Tests _enforce_password_policy_compliance succeeds when no exception is thrown
         """
-        with patch('student.views.login.password_policy_compliance.enforce_compliance_on_login') as mock_check_password_policy_compliance:
+        with patch('user_authn.views.login.password_policy_compliance.enforce_compliance_on_login') as mock_check_password_policy_compliance:
             mock_check_password_policy_compliance.return_value = HttpResponse()
             response, _ = self._login_response(
                 'test@edx.org',
@@ -454,7 +439,7 @@ class LoginTest(CacheIsolationTestCase):
         """
         Tests _enforce_password_policy_compliance fails with an exception thrown
         """
-        with patch('student.views.login.password_policy_compliance.enforce_compliance_on_login') as \
+        with patch('user_authn.views.login.password_policy_compliance.enforce_compliance_on_login') as \
                 mock_enforce_compliance_on_login:
             mock_enforce_compliance_on_login.side_effect = NonCompliantPasswordException()
             response, _ = self._login_response(
@@ -469,7 +454,7 @@ class LoginTest(CacheIsolationTestCase):
         """
         Tests _enforce_password_policy_compliance succeeds with a warning thrown
         """
-        with patch('student.views.login.password_policy_compliance.enforce_compliance_on_login') as \
+        with patch('user_authn.views.login.password_policy_compliance.enforce_compliance_on_login') as \
                 mock_enforce_compliance_on_login:
             mock_enforce_compliance_on_login.side_effect = NonCompliantPasswordWarning('Test warning')
             response, _ = self._login_response(
@@ -480,10 +465,12 @@ class LoginTest(CacheIsolationTestCase):
             self.assertIn('Test warning', self.client.session['_messages'])
         self.assertTrue(response_content.get('success'))
 
-    def _login_response(self, email, password, patched_audit_log='student.views.AUDIT_LOG', extra_post_params=None):
+    def _login_response(self, email, password, patched_audit_log=None, extra_post_params=None):
         """
         Post the login info
         """
+        if patched_audit_log is None:
+            patched_audit_log = 'lms.djangoapps.user_authn.views.login.AUDIT_LOG'
         post_params = {'email': email, 'password': password}
         if extra_post_params is not None:
             post_params.update(extra_post_params)
@@ -626,115 +613,3 @@ class ExternalAuthShibTest(ModuleStoreTestCase):
         self.assertEqual(shib_response.redirect_chain[-2],
                          (target_url_shib, 302))
         self.assertEqual(shib_response.status_code, 200)
-
-
-@httpretty.activate
-class LoginOAuthTokenMixin(ThirdPartyOAuthTestMixin):
-    """
-    Mixin with tests for the login_oauth_token view. A TestCase that includes
-    this must define the following:
-
-    BACKEND: The name of the backend from python-social-auth
-    USER_URL: The URL of the endpoint that the backend retrieves user data from
-    UID_FIELD: The field in the user data that the backend uses as the user id
-    """
-
-    def setUp(self):
-        super(LoginOAuthTokenMixin, self).setUp()
-        self.url = reverse(login_oauth_token, kwargs={"backend": self.BACKEND})
-
-    def _assert_error(self, response, status_code, error):
-        """Assert that the given response was a 400 with the given error code"""
-        self.assertEqual(response.status_code, status_code)
-        self.assertEqual(json.loads(response.content), {"error": error})
-
-    def test_success(self):
-        self._setup_provider_response(success=True)
-        response = self.client.post(self.url, {"access_token": "dummy"})
-        self.assertEqual(response.status_code, 204)
-        self.assertEqual(int(self.client.session['_auth_user_id']), self.user.id)
-
-    def test_invalid_token(self):
-        self._setup_provider_response(success=False)
-        response = self.client.post(self.url, {"access_token": "dummy"})
-        self._assert_error(response, 401, "invalid_token")
-
-    def test_missing_token(self):
-        response = self.client.post(self.url)
-        self._assert_error(response, 400, "invalid_request")
-
-    def test_unlinked_user(self):
-        UserSocialAuth.objects.all().delete()
-        self._setup_provider_response(success=True)
-        response = self.client.post(self.url, {"access_token": "dummy"})
-        self._assert_error(response, 401, "invalid_token")
-
-    def test_get_method(self):
-        response = self.client.get(self.url, {"access_token": "dummy"})
-        self.assertEqual(response.status_code, 405)
-
-
-# This is necessary because cms does not implement third party auth
-@unittest.skipUnless(settings.FEATURES.get("ENABLE_THIRD_PARTY_AUTH"), "third party auth not enabled")
-class LoginOAuthTokenTestFacebook(LoginOAuthTokenMixin, ThirdPartyOAuthTestMixinFacebook, TestCase):
-    """Tests login_oauth_token with the Facebook backend"""
-    pass
-
-
-# This is necessary because cms does not implement third party auth
-@unittest.skipUnless(settings.FEATURES.get("ENABLE_THIRD_PARTY_AUTH"), "third party auth not enabled")
-class LoginOAuthTokenTestGoogle(LoginOAuthTokenMixin, ThirdPartyOAuthTestMixinGoogle, TestCase):
-    """Tests login_oauth_token with the Google backend"""
-    pass
-
-
-class TestPasswordVerificationView(CacheIsolationTestCase):
-    """
-    Test the password verification endpoint.
-    """
-    def setUp(self):
-        super(TestPasswordVerificationView, self).setUp()
-        self.user = UserFactory.build(username='test_user', is_active=True)
-        self.password = 'test_password'
-        self.user.set_password(self.password)
-        self.user.save()
-        # Create a registration for the user
-        RegistrationFactory(user=self.user)
-
-        # Create a profile for the user
-        UserProfileFactory(user=self.user)
-
-        # Create the test client
-        self.client = Client()
-        cache.clear()
-        self.url = reverse('verify_password')
-
-    def test_password_logged_in_valid(self):
-        success = self.client.login(username=self.user.username, password=self.password)
-        assert success
-        response = self.client.post(self.url, {'password': self.password})
-        assert response.status_code == 200
-
-    def test_password_logged_in_invalid(self):
-        success = self.client.login(username=self.user.username, password=self.password)
-        assert success
-        response = self.client.post(self.url, {'password': 'wrong_password'})
-        assert response.status_code == 403
-
-    def test_password_logged_out(self):
-        response = self.client.post(self.url, {'username': self.user.username, 'password': self.password})
-        assert response.status_code == 302
-
-    @patch.dict("django.conf.settings.FEATURES", {'ENABLE_MAX_FAILED_LOGIN_ATTEMPTS': True})
-    @override_settings(MAX_FAILED_LOGIN_ATTEMPTS_LOCKOUT_PERIOD_SECS=6000)
-    def test_locked_out(self):
-        success = self.client.login(username=self.user.username, password=self.password)
-        assert success
-        # Attempt a password check greater than the number of allowed times.
-        for _ in xrange(settings.MAX_FAILED_LOGIN_ATTEMPTS_ALLOWED + 1):
-            self.client.post(self.url, {'password': 'wrong_password'})
-
-        response = self.client.post(self.url, {'password': self.password})
-        assert response.status_code == 403
-        assert response.content == ('This account has been temporarily locked due '
-                                    'to excessive login failures. Try again later.')

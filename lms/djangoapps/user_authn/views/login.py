@@ -1,153 +1,310 @@
-""" Login related views """
+"""
+Views for login / logout and associated functionality
 
-import json
+Much of this file was broken out from views.py, previous history can be found there.
+"""
+
 import logging
 
-import urlparse
+import analytics
 from django.conf import settings
-from django.contrib import messages
+from django.contrib.auth import authenticate, login as django_login
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import redirect
+from django.contrib.auth.models import User
+from django.urls import reverse
+from django.http import HttpResponse
 from django.utils.translation import ugettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
+from ratelimitbackend.exceptions import RateLimitException
 
-from edxmako.shortcuts import render_to_response
-from openedx.core.djangoapps.external_auth.login_and_register import login as external_auth_login
-from openedx.core.djangoapps.external_auth.login_and_register import register as external_auth_register
-from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
-from openedx.core.djangoapps.theming.helpers import is_request_in_themed_site
-from openedx.core.djangoapps.user_api.api import (
-    RegistrationFormFactory,
-    get_login_session_form,
-    get_password_reset_form
-)
-from openedx.features.enterprise_support.api import enterprise_customer_for_request
-from openedx.features.enterprise_support.utils import (
-    handle_enterprise_cookies_for_logistration,
-    update_logistration_context_for_enterprise,
-)
-from student.helpers import get_next_url_for_login_page
-from student.views import register_user as old_register_view, signin_user as old_login_view
 import third_party_auth
-from third_party_auth import pipeline
-from third_party_auth.decorators import xframe_allow_whitelisted
+from edxmako.shortcuts import render_to_response, render_to_string
+from eventtracking import tracker
+from lms.djangoapps.user_authn.cookies import set_logged_in_cookies
+from lms.djangoapps.user_authn.exceptions import AuthFailedError
+import openedx.core.djangoapps.external_auth.views
+from openedx.core.djangoapps.external_auth.models import ExternalAuthMap
+from openedx.core.djangoapps.password_policy import compliance as password_policy_compliance
+from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
+from openedx.core.djangoapps.util.user_messages import PageLevelMessages
+from student.models import (
+    CourseAccessRole,
+    CourseEnrollment,
+    LoginFailures,
+    PasswordHistory,
+    Registration,
+    UserProfile,
+    anonymous_id_for_user,
+    create_comments_service_user
+)
+from student.views import generate_activation_email_context, send_reactivation_email_for_user
+from third_party_auth import pipeline, provider
+from util.json_request import JsonResponse
+
+log = logging.getLogger("edx.student")
+AUDIT_LOG = logging.getLogger("audit")
 
 
-log = logging.getLogger(__name__)
-
-
-@require_http_methods(['GET'])
-@ensure_csrf_cookie
-@xframe_allow_whitelisted
-def login_and_registration_form(request, initial_mode="login"):
-    """Render the combined login/registration form, defaulting to login
-
-    This relies on the JS to asynchronously load the actual form from
-    the user_api.
-
-    Keyword Args:
-        initial_mode (string): Either "login" or "register".
-
+def _do_third_party_auth(request):
     """
-    # Determine the URL to redirect to following login/registration/third_party_auth
-    redirect_to = get_next_url_for_login_page(request)
-    # If we're already logged in, redirect to the dashboard
-    if request.user.is_authenticated:
-        return redirect(redirect_to)
+    User is already authenticated via 3rd party, now try to find and return their associated Django user.
+    """
+    running_pipeline = pipeline.get(request)
+    username = running_pipeline['kwargs'].get('username')
+    backend_name = running_pipeline['backend']
+    third_party_uid = running_pipeline['kwargs']['uid']
+    requested_provider = provider.Registry.get_from_pipeline(running_pipeline)
+    platform_name = configuration_helpers.get_value("platform_name", settings.PLATFORM_NAME)
 
-    # Retrieve the form descriptions from the user API
-    form_descriptions = _get_form_descriptions(request)
+    try:
+        return pipeline.get_authenticated_user(requested_provider, username, third_party_uid)
+    except User.DoesNotExist:
+        AUDIT_LOG.info(
+            u"Login failed - user with username {username} has no social auth "
+            "with backend_name {backend_name}".format(
+                username=username, backend_name=backend_name)
+        )
+        message = _(
+            "You've successfully logged into your {provider_name} account, "
+            "but this account isn't linked with an {platform_name} account yet."
+        ).format(
+            platform_name=platform_name,
+            provider_name=requested_provider.name,
+        )
+        message += "<br/><br/>"
+        message += _(
+            "Use your {platform_name} username and password to log into {platform_name} below, "
+            "and then link your {platform_name} account with {provider_name} from your dashboard."
+        ).format(
+            platform_name=platform_name,
+            provider_name=requested_provider.name,
+        )
+        message += "<br/><br/>"
+        message += _(
+            "If you don't have an {platform_name} account yet, "
+            "click <strong>Register</strong> at the top of the page."
+        ).format(
+            platform_name=platform_name
+        )
 
-    # Our ?next= URL may itself contain a parameter 'tpa_hint=x' that we need to check.
-    # If present, we display a login page focused on third-party auth with that provider.
-    third_party_auth_hint = None
-    if '?' in redirect_to:
+        raise AuthFailedError(message)
+
+
+def _get_user_by_email(request):
+    """
+    Finds a user object in the database based on the given request, ignores all fields except for email.
+    """
+    if 'email' not in request.POST or 'password' not in request.POST:
+        raise AuthFailedError(_('There was an error receiving your login information. Please email us.'))
+
+    email = request.POST['email']
+
+    try:
+        return User.objects.get(email=email)
+    except User.DoesNotExist:
+        if settings.FEATURES['SQUELCH_PII_IN_LOGS']:
+            AUDIT_LOG.warning(u"Login failed - Unknown user email")
+        else:
+            AUDIT_LOG.warning(u"Login failed - Unknown user email: {0}".format(email))
+
+
+def _check_shib_redirect(user):
+    """
+    See if the user has a linked shibboleth account, if so, redirect the user to shib-login.
+    This behavior is pretty much like what gmail does for shibboleth.  Try entering some @stanford.edu
+    address into the Gmail login.
+    """
+    if settings.FEATURES.get('AUTH_USE_SHIB') and user:
         try:
-            next_args = urlparse.parse_qs(urlparse.urlparse(redirect_to).query)
-            provider_id = next_args['tpa_hint'][0]
-            tpa_hint_provider = third_party_auth.provider.Registry.get(provider_id=provider_id)
-            if tpa_hint_provider:
-                if tpa_hint_provider.skip_hinted_login_dialog:
-                    # Forward the user directly to the provider's login URL when the provider is configured
-                    # to skip the dialog.
-                    if initial_mode == "register":
-                        auth_entry = pipeline.AUTH_ENTRY_REGISTER
-                    else:
-                        auth_entry = pipeline.AUTH_ENTRY_LOGIN
-                    return redirect(
-                        pipeline.get_login_url(provider_id, auth_entry, redirect_url=redirect_to)
-                    )
-                third_party_auth_hint = provider_id
-                initial_mode = "hinted_login"
-        except (KeyError, ValueError, IndexError) as ex:
-            log.exception("Unknown tpa_hint provider: %s", ex)
+            eamap = ExternalAuthMap.objects.get(user=user)
+            if eamap.external_domain.startswith(openedx.core.djangoapps.external_auth.views.SHIBBOLETH_DOMAIN_PREFIX):
+                raise AuthFailedError('', redirect=reverse('shib-login'))
+        except ExternalAuthMap.DoesNotExist:
+            # This is actually the common case, logging in user without external linked login
+            AUDIT_LOG.info(u"User %s w/o external auth attempting login", user)
 
-    # If this is a themed site, revert to the old login/registration pages.
-    # We need to do this for now to support existing themes.
-    # Themed sites can use the new logistration page by setting
-    # 'ENABLE_COMBINED_LOGIN_REGISTRATION' in their
-    # configuration settings.
-    if is_request_in_themed_site() and not configuration_helpers.get_value('ENABLE_COMBINED_LOGIN_REGISTRATION', False):
-        if initial_mode == "login":
-            return old_login_view(request)
-        elif initial_mode == "register":
-            return old_register_view(request)
 
-    # Allow external auth to intercept and handle the request
-    ext_auth_response = _external_auth_intercept(request, initial_mode)
-    if ext_auth_response is not None:
-        return ext_auth_response
+def _check_excessive_login_attempts(user):
+    """
+    See if account has been locked out due to excessive login failures
+    """
+    if user and LoginFailures.is_feature_enabled():
+        if LoginFailures.is_user_locked_out(user):
+            raise AuthFailedError(_('This account has been temporarily locked due '
+                                    'to excessive login failures. Try again later.'))
 
-    # Account activation message
-    account_activation_messages = [
-        {
-            'message': message.message, 'tags': message.tags
-        } for message in messages.get_messages(request) if 'account-activation' in message.tags
-    ]
 
-    # Otherwise, render the combined login/registration page
-    context = {
-        'data': {
-            'login_redirect_url': redirect_to,
-            'initial_mode': initial_mode,
-            'third_party_auth': _third_party_auth_context(request, redirect_to, third_party_auth_hint),
-            'third_party_auth_hint': third_party_auth_hint or '',
-            'platform_name': configuration_helpers.get_value('PLATFORM_NAME', settings.PLATFORM_NAME),
-            'support_link': configuration_helpers.get_value('SUPPORT_SITE_LINK', settings.SUPPORT_SITE_LINK),
-            'password_reset_support_link': configuration_helpers.get_value(
-                'PASSWORD_RESET_SUPPORT_LINK', settings.PASSWORD_RESET_SUPPORT_LINK
-            ) or settings.SUPPORT_SITE_LINK,
-            'account_activation_messages': account_activation_messages,
+def _check_forced_password_reset(user):
+    """
+    See if the user must reset his/her password due to any policy settings
+    """
+    if user and PasswordHistory.should_user_reset_password_now(user):
+        raise AuthFailedError(_('Your password has expired due to password policy on this account. You must '
+                                'reset your password before you can log in again. Please click the '
+                                '"Forgot Password" link on this page to reset your password before logging in again.'))
 
-            # Include form descriptions retrieved from the user API.
-            # We could have the JS client make these requests directly,
-            # but we include them in the initial page load to avoid
-            # the additional round-trip to the server.
-            'login_form_desc': json.loads(form_descriptions['login']),
-            'registration_form_desc': json.loads(form_descriptions['registration']),
-            'password_reset_form_desc': json.loads(form_descriptions['password_reset']),
-            'account_creation_allowed': configuration_helpers.get_value(
-                'ALLOW_PUBLIC_ACCOUNT_CREATION', settings.FEATURES.get('ALLOW_PUBLIC_ACCOUNT_CREATION', True))
-        },
-        'login_redirect_url': redirect_to,  # This gets added to the query string of the "Sign In" button in header
-        'responsive': True,
-        'allow_iframing': True,
-        'disable_courseware_js': True,
-        'combined_login_and_register': True,
-        'disable_footer': not configuration_helpers.get_value(
-            'ENABLE_COMBINED_LOGIN_REGISTRATION_FOOTER',
-            settings.FEATURES['ENABLE_COMBINED_LOGIN_REGISTRATION_FOOTER']
-        ),
-    }
 
-    enterprise_customer = enterprise_customer_for_request(request)
-    update_logistration_context_for_enterprise(request, context, enterprise_customer)
+def _enforce_password_policy_compliance(request, user):
+    try:
+        password_policy_compliance.enforce_compliance_on_login(user, request.POST.get('password'))
+    except password_policy_compliance.NonCompliantPasswordWarning as e:
+        # Allow login, but warn the user that they will be required to reset their password soon.
+        PageLevelMessages.register_warning_message(request, e.message)
+    except password_policy_compliance.NonCompliantPasswordException as e:
+        # Prevent the login attempt.
+        raise AuthFailedError(e.message)
 
-    response = render_to_response('student_account/login_and_register.html', context)
-    handle_enterprise_cookies_for_logistration(request, response, context)
 
-    return response
+def _generate_not_activated_message(user):
+    """
+    Generates the message displayed on the sign-in screen when a learner attempts to access the
+    system with an inactive account.
+    """
+
+    support_url = configuration_helpers.get_value(
+        'SUPPORT_SITE_LINK',
+        settings.SUPPORT_SITE_LINK
+    )
+
+    platform_name = configuration_helpers.get_value(
+        'PLATFORM_NAME',
+        settings.PLATFORM_NAME
+    )
+
+    not_activated_msg_template = _('In order to sign in, you need to activate your account.<br /><br />'
+                                   'We just sent an activation link to <strong>{email}</strong>.  If '
+                                   'you do not receive an email, check your spam folders or '
+                                   '<a href="{support_url}">contact {platform} Support</a>.')
+
+    not_activated_message = not_activated_msg_template.format(
+        email=user.email,
+        support_url=support_url,
+        platform=platform_name
+    )
+
+    return not_activated_message
+
+
+def _log_and_raise_inactive_user_auth_error(unauthenticated_user):
+    """
+    Depending on Django version we can get here a couple of ways, but this takes care of logging an auth attempt
+    by an inactive user, re-sending the activation email, and raising an error with the correct message.
+    """
+    if settings.FEATURES['SQUELCH_PII_IN_LOGS']:
+        AUDIT_LOG.warning(
+            u"Login failed - Account not active for user.id: {0}, resending activation".format(
+                unauthenticated_user.id)
+        )
+    else:
+        AUDIT_LOG.warning(u"Login failed - Account not active for user {0}, resending activation".format(
+            unauthenticated_user.username)
+        )
+
+    send_reactivation_email_for_user(unauthenticated_user)
+    raise AuthFailedError(_generate_not_activated_message(unauthenticated_user))
+
+
+def _authenticate_first_party(request, unauthenticated_user):
+    """
+    Use Django authentication on the given request, using rate limiting if configured
+    """
+
+    # If the user doesn't exist, we want to set the username to an invalid username so that authentication is guaranteed
+    # to fail and we can take advantage of the ratelimited backend
+    username = unauthenticated_user.username if unauthenticated_user else ""
+
+    try:
+        return authenticate(
+            username=username,
+            password=request.POST['password'],
+            request=request)
+
+    # This occurs when there are too many attempts from the same IP address
+    except RateLimitException:
+        raise AuthFailedError(_('Too many failed login attempts. Try again later.'))
+
+
+def _handle_failed_authentication(user):
+    """
+    Handles updating the failed login count, inactive user notifications, and logging failed authentications.
+    """
+    if user:
+        if LoginFailures.is_feature_enabled():
+            LoginFailures.increment_lockout_counter(user)
+
+        if not user.is_active:
+            _log_and_raise_inactive_user_auth_error(user)
+
+        # if we didn't find this username earlier, the account for this email
+        # doesn't exist, and doesn't have a corresponding password
+        if settings.FEATURES['SQUELCH_PII_IN_LOGS']:
+            loggable_id = user.id if user else "<unknown>"
+            AUDIT_LOG.warning(u"Login failed - password for user.id: {0} is invalid".format(loggable_id))
+        else:
+            AUDIT_LOG.warning(u"Login failed - password for {0} is invalid".format(user.email))
+
+    raise AuthFailedError(_('Email or password is incorrect.'))
+
+
+def _handle_successful_authentication_and_login(user, request):
+    """
+    Handles clearing the failed login counter, login tracking, and setting session timeout.
+    """
+    if LoginFailures.is_feature_enabled():
+        LoginFailures.clear_lockout_counter(user)
+
+    _track_user_login(user, request)
+
+    try:
+        django_login(request, user)
+        if request.POST.get('remember') == 'true':
+            request.session.set_expiry(604800)
+            log.debug("Setting user session to never expire")
+        else:
+            request.session.set_expiry(0)
+    except Exception as exc:  # pylint: disable=broad-except
+        AUDIT_LOG.critical("Login failed - Could not create session. Is memcached running?")
+        log.critical("Login failed - Could not create session. Is memcached running?")
+        log.exception(exc)
+        raise
+
+
+def _track_user_login(user, request):
+    """
+    Sends a tracking event for a successful login.
+    """
+    if hasattr(settings, 'LMS_SEGMENT_KEY') and settings.LMS_SEGMENT_KEY:
+        tracking_context = tracker.get_tracker().resolve_context()
+        analytics.identify(
+            user.id,
+            {
+                'email': request.POST['email'],
+                'username': user.username
+            },
+            {
+                # Disable MailChimp because we don't want to update the user's email
+                # and username in MailChimp on every page load. We only need to capture
+                # this data on registration/activation.
+                'MailChimp': False
+            }
+        )
+
+        analytics.track(
+            user.id,
+            "edx.bi.user.account.authenticated",
+            {
+                'category': "conversion",
+                'label': request.POST.get('course_id'),
+                'provider': None
+            },
+            context={
+                'ip': tracking_context.get('ip'),
+                'Google Analytics': {
+                    'clientId': tracking_context.get('client_id')
+                }
+            }
+        )
 
 
 @login_required
@@ -184,109 +341,61 @@ def finish_auth(request):  # pylint: disable=unused-argument
     })
 
 
-def _get_form_descriptions(request):
-    """Retrieve form descriptions from the user API.
-
-    Arguments:
-        request (HttpRequest): The original request, used to retrieve session info.
-
-    Returns:
-        dict: Keys are 'login', 'registration', and 'password_reset';
-            values are the JSON-serialized form descriptions.
-
+@ensure_csrf_cookie
+def login_user(request):
     """
-
-    return {
-        'password_reset': get_password_reset_form().to_json(),
-        'login': get_login_session_form(request).to_json(),
-        'registration': RegistrationFormFactory().get_registration_form(request).to_json()
-    }
-
-
-def _third_party_auth_context(request, redirect_to, tpa_hint=None):
-    """Context for third party auth providers and the currently running pipeline.
-
-    Arguments:
-        request (HttpRequest): The request, used to determine if a pipeline
-            is currently running.
-        redirect_to: The URL to send the user to following successful
-            authentication.
-        tpa_hint (string): An override flag that will return a matching provider
-            as long as its configuration has been enabled
-
-    Returns:
-        dict
-
+    AJAX request to log in the user.
     """
-    context = {
-        "currentProvider": None,
-        "providers": [],
-        "secondaryProviders": [],
-        "finishAuthUrl": None,
-        "errorMessage": None,
-        "registerFormSubmitButtonText": _("Create Account"),
-        "syncLearnerProfileData": False,
-        "pipeline_user_details": {}
-    }
+    third_party_auth_requested = third_party_auth.is_enabled() and pipeline.running(request)
+    trumped_by_first_party_auth = bool(request.POST.get('email')) or bool(request.POST.get('password'))
+    was_authenticated_third_party = False
 
-    if third_party_auth.is_enabled():
-        for enabled in third_party_auth.provider.Registry.displayed_for_login(tpa_hint=tpa_hint):
-            info = {
-                "id": enabled.provider_id,
-                "name": enabled.name,
-                "iconClass": enabled.icon_class or None,
-                "iconImage": enabled.icon_image.url if enabled.icon_image else None,
-                "loginUrl": pipeline.get_login_url(
-                    enabled.provider_id,
-                    pipeline.AUTH_ENTRY_LOGIN,
-                    redirect_url=redirect_to,
-                ),
-                "registerUrl": pipeline.get_login_url(
-                    enabled.provider_id,
-                    pipeline.AUTH_ENTRY_REGISTER,
-                    redirect_url=redirect_to,
-                ),
-            }
-            context["providers" if not enabled.secondary else "secondaryProviders"].append(info)
+    try:
+        if third_party_auth_requested and not trumped_by_first_party_auth:
+            # The user has already authenticated via third-party auth and has not
+            # asked to do first party auth by supplying a username or password. We
+            # now want to put them through the same logging and cookie calculation
+            # logic as with first-party auth.
 
-        running_pipeline = pipeline.get(request)
-        if running_pipeline is not None:
-            current_provider = third_party_auth.provider.Registry.get_from_pipeline(running_pipeline)
-            user_details = running_pipeline['kwargs']['details']
-            if user_details:
-                context['pipeline_user_details'] = user_details
+            # This nested try is due to us only returning an HttpResponse in this
+            # one case vs. JsonResponse everywhere else.
+            try:
+                email_user = _do_third_party_auth(request)
+                was_authenticated_third_party = True
+            except AuthFailedError as e:
+                return HttpResponse(e.value, content_type="text/plain", status=403)
+        else:
+            email_user = _get_user_by_email(request)
 
-            if current_provider is not None:
-                context["currentProvider"] = current_provider.name
-                context["finishAuthUrl"] = pipeline.get_complete_url(current_provider.backend_name)
-                context["syncLearnerProfileData"] = current_provider.sync_learner_profile_data
+        _check_shib_redirect(email_user)
+        _check_excessive_login_attempts(email_user)
+        _check_forced_password_reset(email_user)
 
-                if current_provider.skip_registration_form:
-                    # As a reliable way of "skipping" the registration form, we just submit it automatically
-                    context["autoSubmitRegForm"] = True
+        possibly_authenticated_user = email_user
 
-        # Check for any error messages we may want to display:
-        for msg in messages.get_messages(request):
-            if msg.extra_tags.split()[0] == "social-auth":
-                # msg may or may not be translated. Try translating [again] in case we are able to:
-                context['errorMessage'] = _(unicode(msg))
-                break
+        if not was_authenticated_third_party:
+            possibly_authenticated_user = _authenticate_first_party(request, email_user)
+            if possibly_authenticated_user and password_policy_compliance.should_enforce_compliance_on_login():
+                # Important: This call must be made AFTER the user was successfully authenticated.
+                _enforce_password_policy_compliance(request, possibly_authenticated_user)
 
-    return context
+        if possibly_authenticated_user is None or not possibly_authenticated_user.is_active:
+            _handle_failed_authentication(email_user)
 
+        _handle_successful_authentication_and_login(possibly_authenticated_user, request)
 
-def _external_auth_intercept(request, mode):
-    """Allow external auth to intercept a login/registration request.
+        redirect_url = None  # The AJAX method calling should know the default destination upon success
+        if was_authenticated_third_party:
+            running_pipeline = pipeline.get(request)
+            redirect_url = pipeline.get_complete_url(backend_name=running_pipeline['backend'])
 
-    Arguments:
-        request (Request): The original request.
-        mode (str): Either "login" or "register"
+        response = JsonResponse({
+            'success': True,
+            'redirect_url': redirect_url,
+        })
 
-    Returns:
-        Response or None
-
-    """
-    if mode == "login":
-        return external_auth_login(request)
-    elif mode == "register":
-        return external_auth_register(request)
+        # Ensure that the external marketing site can
+        # detect that the user is logged in.
+        return set_logged_in_cookies(request, response, possibly_authenticated_user)
+    except AuthFailedError as error:
+        return JsonResponse(error.get_response())
