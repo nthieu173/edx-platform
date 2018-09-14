@@ -1,22 +1,18 @@
 """ URLs for User Authentication """
 from django.conf import settings
-from django.conf.urls import url
+from django.conf.urls import include, url
 
 from openedx.core.djangoapps.user_api.accounts import settings_views
-from .views import auto_auth, login_form, login, logout, deprecated
+from .views import auto_auth, login_form, login, deprecated
 
 
 urlpatterns = [
     # TODO this should really be declared in the user_api app
     url(r'^account/settings$', settings_views.account_settings, name='account_settings'),
 
-    url(r'^create_account$', deprecated.create_account, name='create_account'),
-    url(r'^login_post$', login.login_user, name='login_post'),
-    url(r'^login_ajax$', login.login_user, name="login"),
-    url(r'^login_ajax/(?P<error>[^/]*)$', login.login_user),
+    # TODO move urls_common here once LMS and CMS are consistent
+    url(r'', include('openedx.core.djangoapps.user_authn.urls_common')),
     url(r'^account/finish_auth$', login.finish_auth, name='finish_auth'),
-
-    url(r'^logout$', logout.LogoutView.as_view(), name='logout'),
 ]
 
 

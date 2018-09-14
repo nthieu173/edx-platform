@@ -20,10 +20,5 @@ class UserAuthnConfig(AppConfig):
                 PluginURLs.REGEX: u'',
                 PluginURLs.RELATIVE_PATH: u'urls',
             },
-            ProjectType.CMS: {
-                PluginURLs.NAMESPACE: u'',
-                PluginURLs.REGEX: u'',
-                PluginURLs.RELATIVE_PATH: u'urls',
-            },
         },
     }
