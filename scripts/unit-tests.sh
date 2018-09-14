@@ -29,7 +29,7 @@ set -e
 #
 ###############################################################################
 
-export SKIP_NPM_INSTALL="True"
+export SKIP_NPM_INSTALL="False"
 
 # Skip re-installation of Python prerequisites inside a tox execution.
 if [[ -n "$TOXENV" ]]; then
